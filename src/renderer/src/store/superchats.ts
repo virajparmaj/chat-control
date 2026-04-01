@@ -28,6 +28,7 @@ interface SuperchatsState {
   setStats: (stats: SessionStats) => void
   markRead: (messageId: string) => Promise<void>
   save: (messageId: string) => Promise<void>
+  markAllRead: () => Promise<number>
   undo: () => Promise<void>
   setSort: (sort: SortOrder) => void
 }
@@ -49,7 +50,7 @@ export const useSuperchatStore = create<SuperchatsState>((set, get) => ({
   stats: EMPTY_STATS,
   sort: 'latest',
   undoEntry: null,
-  loading: false,
+  loading: true,
 
   hydrateSnapshot: (snapshot, sort) => {
     if (!snapshot) {
@@ -160,6 +161,27 @@ export const useSuperchatStore = create<SuperchatsState>((set, get) => ({
 
     get().upsertMessage(updated)
     set({ undoEntry: { messageId, timer } })
+  },
+
+  markAllRead: async () => {
+    const sessionId = get().sessionId
+    if (!sessionId) return 0
+
+    const existingUndo = get().undoEntry
+    if (existingUndo) clearTimeout(existingUndo.timer)
+
+    const updatedMessages = await window.api.superchats.markAllRead(sessionId)
+    if (updatedMessages.length === 0) {
+      set({ undoEntry: null })
+      return 0
+    }
+
+    for (const message of updatedMessages) {
+      get().upsertMessage(message)
+    }
+
+    set({ undoEntry: null })
+    return updatedMessages.length
   },
 
   undo: async () => {

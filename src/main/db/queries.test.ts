@@ -33,14 +33,23 @@ describeWithNativeDb('DatabaseQueries', () => {
     createSession: (...args: unknown[]) => unknown
     getSession: (...args: unknown[]) => Record<string, unknown> | null
     ingestPaidMessage: (...args: unknown[]) => unknown
+    listSessions: (...args: unknown[]) => unknown[]
     listPaidMessages: (...args: unknown[]) => unknown[]
+    listSavedArchive: (...args: unknown[]) => unknown[]
     listDonors: (...args: unknown[]) => unknown[]
+    listAllTimeDonors: (...args: unknown[]) => unknown[]
     getSessionStats: (...args: unknown[]) => Record<string, unknown>
     updateMessageState: (...args: unknown[]) => unknown
+    clearSavedMessages: (...args: unknown[]) => unknown[]
     endSession: (...args: unknown[]) => Record<string, unknown> | null
     getSessionSummary: (...args: unknown[]) => Record<string, unknown> | null
+    getSessionReport: (...args: unknown[]) => Record<string, unknown> | null
     updateSessionResumeState: (...args: unknown[]) => void
     markSessionError: (...args: unknown[]) => Record<string, unknown> | null
+    getActiveSessionSnapshot: (...args: unknown[]) => Record<string, unknown> | null
+    clearLocalData: () => void
+    setPreference: (key: string, value: string) => void
+    getPreference: (key: string) => string | null
   }
 
   beforeEach(() => {
@@ -215,6 +224,183 @@ describeWithNativeDb('DatabaseQueries', () => {
     })
   })
 
+  it('lists saved items across sessions and sorts them by amount by default', () => {
+    const currentSession = queries.createSession({
+      id: 'session-saved-current',
+      youtubeBroadcastId: 'broadcast-saved-current',
+      liveChatId: 'chat-saved-current',
+      title: 'Current Stream',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    const endedSession = queries.createSession({
+      id: 'session-saved-ended',
+      youtubeBroadcastId: 'broadcast-saved-ended',
+      liveChatId: 'chat-saved-ended',
+      title: 'Ended Stream',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    const lowerValue = queries.ingestPaidMessage({
+      id: 'saved-current',
+      youtubeMessageId: 'saved-current-yt',
+      sessionId: currentSession.id,
+      donorChannelId: 'current-donor',
+      donorDisplayName: 'Current Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 25_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 25,
+      convertedAmount: 25,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$25.00',
+      messageText: 'Current message',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 2,
+      receivedAt: '2026-03-30T12:01:00.000Z',
+      rawPayload: '{}'
+    }) as { id: string }
+
+    const higherValue = queries.ingestPaidMessage({
+      id: 'saved-ended',
+      youtubeMessageId: 'saved-ended-yt',
+      sessionId: endedSession.id,
+      donorChannelId: 'ended-donor',
+      donorDisplayName: 'Ended Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 50_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 50,
+      convertedAmount: 50,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$50.00',
+      messageText: 'Ended message',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 7,
+      receivedAt: '2026-03-28T12:01:00.000Z',
+      rawPayload: '{}'
+    }) as { id: string }
+
+    queries.updateMessageState(lowerValue.id, 'saved')
+    queries.updateMessageState(higherValue.id, 'saved')
+    queries.endSession(endedSession.id)
+
+    const savedArchive = queries.listSavedArchive() as Array<Record<string, unknown>>
+
+    expect(savedArchive).toHaveLength(2)
+    expect(savedArchive[0]).toMatchObject({
+      id: 'saved-ended',
+      donorDisplayName: 'Ended Donor',
+      sessionTitle: 'Ended Stream',
+      sessionStatus: 'ended'
+    })
+    expect(savedArchive[1]).toMatchObject({
+      id: 'saved-current',
+      donorDisplayName: 'Current Donor',
+      sessionTitle: 'Current Stream',
+      sessionStatus: 'active'
+    })
+  })
+
+  it('bulk clears saved items by moving them to read without deleting message history', () => {
+    const session = queries.createSession({
+      id: 'session-clear-saved',
+      youtubeBroadcastId: 'broadcast-clear-saved',
+      liveChatId: 'chat-clear-saved',
+      title: 'Clear Saved Stream',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    const savedMessage = queries.ingestPaidMessage({
+      id: 'saved-clear-target',
+      youtubeMessageId: 'saved-clear-target-yt',
+      sessionId: session.id,
+      donorChannelId: 'saved-clear-donor',
+      donorDisplayName: 'Saved Clear Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 30_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 30,
+      convertedAmount: 30,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$30.00',
+      messageText: 'Keep this in history',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 3,
+      receivedAt: '2026-03-30T12:00:00.000Z',
+      rawPayload: '{}'
+    }) as { id: string }
+
+    queries.updateMessageState(savedMessage.id, 'saved')
+
+    const cleared = queries.clearSavedMessages() as Array<Record<string, unknown>>
+
+    expect(cleared).toHaveLength(1)
+    expect(cleared[0]).toMatchObject({
+      id: 'saved-clear-target',
+      state: 'read'
+    })
+    expect(queries.getSessionStats(session.id)).toMatchObject({
+      savedCount: 0,
+      unreadCount: 0,
+      messageCount: 1,
+      totalConverted: 30
+    })
+    expect(
+      (queries.listPaidMessages(session.id) as Array<Record<string, unknown>>)[0]
+    ).toMatchObject({
+      id: 'saved-clear-target',
+      state: 'read'
+    })
+  })
+
+  it('clears local sessions, messages, donors, and preferences together', () => {
+    const session = queries.createSession({
+      id: 'session-clear',
+      youtubeBroadcastId: 'broadcast-clear',
+      liveChatId: 'chat-clear',
+      title: 'Cleanup Stream',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    queries.ingestPaidMessage({
+      id: 'clear-message-1',
+      youtubeMessageId: 'clear-yt-1',
+      sessionId: session.id,
+      donorChannelId: 'clear-donor',
+      donorDisplayName: 'Cleanup Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 15_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 15,
+      convertedAmount: 15,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$15.00',
+      messageText: 'Cleanup time',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 2,
+      receivedAt: '2026-03-30T12:00:00.000Z',
+      rawPayload: '{}'
+    })
+    queries.setPreference('app_preferences', '{"preferredCurrency":"EUR"}')
+
+    queries.clearLocalData()
+
+    expect(queries.listSessions()).toEqual([])
+    expect(queries.listPaidMessages(session.id)).toEqual([])
+    expect(queries.listDonors(session.id)).toEqual([])
+    expect(queries.getPreference('app_preferences')).toBeNull()
+    expect(queries.getActiveSessionSnapshot()).toBeNull()
+  })
+
   it('builds a full session summary from stored session data', () => {
     const session = queries.createSession({
       id: 'session-3',
@@ -293,6 +479,291 @@ describeWithNativeDb('DatabaseQueries', () => {
       'Alpha'
     ])
     expect(summary?.endedAt).not.toBeNull()
+  })
+
+  it('aggregates all-time donor totals across local sessions', () => {
+    const firstSession = queries.createSession({
+      id: 'session-all-time-1',
+      youtubeBroadcastId: 'broadcast-all-time-1',
+      liveChatId: 'chat-all-time-1',
+      title: 'All Time One',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    const secondSession = queries.createSession({
+      id: 'session-all-time-2',
+      youtubeBroadcastId: 'broadcast-all-time-2',
+      liveChatId: 'chat-all-time-2',
+      title: 'All Time Two',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    queries.ingestPaidMessage({
+      id: 'all-time-1',
+      youtubeMessageId: 'all-time-yt-1',
+      sessionId: firstSession.id,
+      donorChannelId: 'repeat-donor',
+      donorDisplayName: 'Repeat Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 45_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 45,
+      convertedAmount: 45,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$45.00',
+      messageText: 'First stream support',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 3,
+      receivedAt: '2026-03-25T12:00:00.000Z',
+      rawPayload: '{}'
+    })
+
+    queries.ingestPaidMessage({
+      id: 'all-time-2',
+      youtubeMessageId: 'all-time-yt-2',
+      sessionId: secondSession.id,
+      donorChannelId: 'repeat-donor',
+      donorDisplayName: 'Repeat Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 55_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 55,
+      convertedAmount: 55,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$55.00',
+      messageText: 'Second stream support',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 5,
+      receivedAt: '2026-03-30T12:00:00.000Z',
+      rawPayload: '{}'
+    })
+
+    queries.ingestPaidMessage({
+      id: 'all-time-3',
+      youtubeMessageId: 'all-time-yt-3',
+      sessionId: secondSession.id,
+      donorChannelId: 'fresh-donor',
+      donorDisplayName: 'Fresh Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 25_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 25,
+      convertedAmount: 25,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$25.00',
+      messageText: 'Fresh support',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 2,
+      receivedAt: '2026-03-30T12:05:00.000Z',
+      rawPayload: '{}'
+    })
+
+    const donors = queries.listAllTimeDonors() as Array<Record<string, unknown>>
+
+    expect(donors).toHaveLength(2)
+    expect(donors[0]).toMatchObject({
+      channelId: 'repeat-donor',
+      displayName: 'Repeat Donor',
+      totalConverted: 100,
+      messageCount: 2
+    })
+    expect(donors[1]).toMatchObject({
+      channelId: 'fresh-donor',
+      displayName: 'Fresh Donor',
+      totalConverted: 25,
+      messageCount: 1
+    })
+  })
+
+  it('derives the richer session report analytics for history detail screens', () => {
+    const previousSession = queries.createSession({
+      id: 'session-prev',
+      youtubeBroadcastId: 'broadcast-prev',
+      liveChatId: 'chat-prev',
+      title: 'Previous Stream',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    queries.ingestPaidMessage({
+      id: 'previous-1',
+      youtubeMessageId: 'previous-yt-1',
+      sessionId: previousSession.id,
+      donorChannelId: 'repeat-donor',
+      donorDisplayName: 'Repeat Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 20_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 20,
+      convertedAmount: 20,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$20.00',
+      messageText: 'Previous support',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 2,
+      receivedAt: '2026-03-29T10:00:00.000Z',
+      rawPayload: '{}'
+    })
+    queries.endSession(previousSession.id)
+    ;(db as unknown as { prepare: (sql: string) => { run: (...args: unknown[]) => void } })
+      .prepare('UPDATE sessions SET started_at = ?, ended_at = ?, status = ? WHERE id = ?')
+      .run('2026-03-29T09:00:00.000Z', '2026-03-29T10:00:00.000Z', 'ended', previousSession.id)
+
+    const currentSession = queries.createSession({
+      id: 'session-report',
+      youtubeBroadcastId: 'broadcast-report',
+      liveChatId: 'chat-report',
+      title: 'Report Stream',
+      convertedCurrency: 'USD'
+    }) as { id: string }
+
+    queries.ingestPaidMessage({
+      id: 'report-1',
+      youtubeMessageId: 'report-yt-1',
+      sessionId: currentSession.id,
+      donorChannelId: 'repeat-donor',
+      donorDisplayName: 'Repeat Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 15_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 15,
+      convertedAmount: 15,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$15.00',
+      messageText: 'Back again',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 2,
+      receivedAt: '2026-03-30T12:00:00.000Z',
+      rawPayload: '{}'
+    })
+    queries.ingestPaidMessage({
+      id: 'report-2',
+      youtubeMessageId: 'report-yt-2',
+      sessionId: currentSession.id,
+      donorChannelId: 'new-big',
+      donorDisplayName: 'New Big Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 125_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 125,
+      convertedAmount: 125,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$125.00',
+      messageText: 'Huge support',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 5,
+      receivedAt: '2026-03-30T12:10:00.000Z',
+      rawPayload: '{}'
+    })
+    queries.ingestPaidMessage({
+      id: 'report-3',
+      youtubeMessageId: 'report-yt-3',
+      sessionId: currentSession.id,
+      donorChannelId: 'repeat-donor',
+      donorDisplayName: 'Repeat Donor',
+      donorAvatarUrl: null,
+      type: 'super_sticker',
+      amountMicros: 55_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 55,
+      convertedAmount: 55,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$55.00',
+      messageText: null,
+      stickerId: 'sparkle',
+      stickerAltText: 'Sparkle',
+      tier: 3,
+      receivedAt: '2026-03-30T12:20:00.000Z',
+      rawPayload: '{}'
+    })
+    queries.ingestPaidMessage({
+      id: 'report-4',
+      youtubeMessageId: 'report-yt-4',
+      sessionId: currentSession.id,
+      donorChannelId: 'new-small',
+      donorDisplayName: 'New Small Donor',
+      donorAvatarUrl: null,
+      type: 'super_chat',
+      amountMicros: 8_000_000,
+      originalCurrency: 'USD',
+      originalAmount: 8,
+      convertedAmount: 8,
+      convertedCurrency: 'USD',
+      amountDisplayString: '$8.00',
+      messageText: 'Small but mighty',
+      stickerId: null,
+      stickerAltText: null,
+      tier: 1,
+      receivedAt: '2026-03-30T13:05:00.000Z',
+      rawPayload: '{}'
+    })
+    queries.endSession(currentSession.id)
+    ;(db as unknown as { prepare: (sql: string) => { run: (...args: unknown[]) => void } })
+      .prepare('UPDATE sessions SET started_at = ?, ended_at = ?, status = ? WHERE id = ?')
+      .run('2026-03-30T12:00:00.000Z', '2026-03-30T13:05:00.000Z', 'ended', currentSession.id)
+
+    const report = queries.getSessionReport(currentSession.id) as
+      | (Record<string, unknown> & {
+          topSupporters: Array<Record<string, unknown>>
+          amountBuckets: Record<string, unknown>
+          typeBreakdown: Record<string, Record<string, unknown>>
+          comparisonToPrevious: Record<string, unknown> | null
+          highestSingleDonation: Record<string, unknown> | null
+          peakDonationWindow: Record<string, unknown> | null
+        })
+      | null
+
+    expect(report).not.toBeNull()
+    expect(report).toMatchObject({
+      durationMinutes: 65,
+      uniqueDonors: 3,
+      repeatDonors: 1,
+      newSupporters: 2
+    })
+    expect(report?.amountBuckets).toMatchObject({
+      underTwenty: 2,
+      twentyToFortyNine: 0,
+      fiftyToNinetyNine: 1,
+      hundredPlus: 1
+    })
+    expect(report?.typeBreakdown.superChats).toMatchObject({
+      count: 3,
+      totalConverted: 148
+    })
+    expect(report?.typeBreakdown.superStickers).toMatchObject({
+      count: 1,
+      totalConverted: 55
+    })
+    expect(report?.highestSingleDonation).toMatchObject({
+      donorDisplayName: 'New Big Donor',
+      amount: 125
+    })
+    expect(report?.peakDonationWindow).toMatchObject({
+      totalConverted: 195,
+      messageCount: 3
+    })
+    expect(report?.comparisonToPrevious).toMatchObject({
+      previousSessionId: 'session-prev',
+      totalRaisedDelta: 183,
+      superChatsDelta: 2,
+      uniqueDonorsDelta: 2
+    })
+    expect(report?.topSupporters[0]).toMatchObject({
+      displayName: 'Repeat Donor',
+      totalConverted: 70
+    })
+    expect(report?.messagesPerHour).toBeCloseTo(3.69, 2)
   })
 
   it('distinguishes ended sessions from errored sessions during finalization', () => {

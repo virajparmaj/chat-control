@@ -1,29 +1,17 @@
-import { useEffect, useState } from 'react'
-import {
-  AlertCircle,
-  Link2,
-  Loader2,
-  Play,
-  Radio,
-  RefreshCw,
-  Square,
-  Wifi,
-  WifiOff
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertCircle, Clock3, Link2, Radio, RefreshCw } from 'lucide-react'
 import { useStreamStore } from '../../store/stream'
 import { useAuthStore } from '../../store/auth'
-import { useSuperchatStore } from '../../store/superchats'
-import { formatCurrency } from '../../lib/currency'
+import { formatCompactCurrency } from '../../lib/currency'
 import { useSettingsStore } from '../../store/settings'
-import type { StreamStatusEvent } from '../../../../shared/ipc-types'
-import { StreamSourceBadge } from './StreamSourceBadge'
+import type { BroadcastInfo } from '../../../../shared/ipc-types'
+import { LiveSessionCommand } from './LiveSessionCommand'
 
 export function StreamInfo(): React.JSX.Element {
   const authStatus = useAuthStore((state) => state.status)
   const broadcasts = useStreamStore((state) => state.broadcasts)
   const resolvedTarget = useStreamStore((state) => state.resolvedTarget)
   const activeSession = useStreamStore((state) => state.activeSession)
-  const streamStatus = useStreamStore((state) => state.streamStatus)
   const loading = useStreamStore((state) => state.loading)
   const loadingContext = useStreamStore((state) => state.loadingContext)
   const error = useStreamStore((state) => state.error)
@@ -36,23 +24,72 @@ export function StreamInfo(): React.JSX.Element {
   const startSessionFromTarget = useStreamStore((state) => state.startSessionFromTarget)
   const stopSession = useStreamStore((state) => state.stopSession)
 
-  const stats = useSuperchatStore((state) => state.stats)
   const preferences = useSettingsStore((state) => state.preferences)
 
   const [refreshing, setRefreshing] = useState(false)
-  const [showTargetMonitor, setShowTargetMonitor] = useState(false)
   const [targetInput, setTargetInput] = useState('')
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null)
+  const [todayStats, setTodayStats] = useState({
+    sessions: 0,
+    superChats: 0,
+    totalRaised: 0,
+    currency: preferences.preferredCurrency
+  })
+  const [todayStatsLoading, setTodayStatsLoading] = useState(false)
+  const targetInputRef = useRef<HTMLInputElement>(null)
+
+  const loadTodayStats = useCallback(async (): Promise<void> => {
+    if (!authStatus.authenticated) {
+      setTodayStats({
+        sessions: 0,
+        superChats: 0,
+        totalRaised: 0,
+        currency: preferences.preferredCurrency
+      })
+      return
+    }
+
+    setTodayStatsLoading(true)
+    try {
+      const sessions = await window.api.sessions.list()
+      const now = new Date()
+      const todaysSessions = sessions.filter((session) => isSameLocalDay(session.startedAt, now))
+      const currency =
+        todaysSessions.find((session) => session.convertedCurrency)?.convertedCurrency ??
+        preferences.preferredCurrency
+
+      setTodayStats({
+        sessions: todaysSessions.length,
+        superChats: todaysSessions.reduce((sum, session) => sum + session.messageCount, 0),
+        totalRaised: todaysSessions.reduce((sum, session) => sum + session.totalConverted, 0),
+        currency
+      })
+    } catch {
+      setTodayStats({
+        sessions: 0,
+        superChats: 0,
+        totalRaised: 0,
+        currency: preferences.preferredCurrency
+      })
+    } finally {
+      setTodayStatsLoading(false)
+    }
+  }, [authStatus.authenticated, preferences.preferredCurrency])
 
   useEffect(() => {
     if (authStatus.authenticated) {
-      void fetchBroadcasts()
+      void (async () => {
+        await Promise.all([fetchBroadcasts(), loadTodayStats()])
+        setLastSyncedAt(new Date())
+      })()
     }
-  }, [authStatus.authenticated, fetchBroadcasts])
+  }, [authStatus.authenticated, fetchBroadcasts, loadTodayStats])
 
   const handleRefresh = async (): Promise<void> => {
     setRefreshing(true)
     try {
-      await fetchBroadcasts()
+      await Promise.all([fetchBroadcasts(), loadTodayStats()])
+      setLastSyncedAt(new Date())
     } finally {
       setRefreshing(false)
     }
@@ -70,276 +107,699 @@ export function StreamInfo(): React.JSX.Element {
     await resolveTarget(targetInput)
   }
 
-  const displayCurrency =
-    activeSession?.convertedCurrency ?? stats.convertedCurrency ?? preferences.preferredCurrency
   const creatorError = errorContext === 'creator' ? error : null
   const targetError = errorContext === 'target' ? error : null
   const generalError = errorContext === null ? error : null
+  const creatorErrorMessage = creatorError ? formatStreamErrorMessage(creatorError) : null
+  const targetErrorMessage = targetError ? formatStreamErrorMessage(targetError) : null
+  const generalErrorMessage = generalError ? formatStreamErrorMessage(generalError) : null
   const creatorLoading = loading && loadingContext === 'creator'
   const targetLoading = loading && loadingContext === 'target'
+  const sortedBroadcasts = useMemo(() => {
+    return [...broadcasts].sort((left, right) => {
+      const leftTime = new Date(left.actualStartTime ?? left.scheduledStartTime ?? 0).getTime()
+      const rightTime = new Date(right.actualStartTime ?? right.scheduledStartTime ?? 0).getTime()
+      return rightTime - leftTime
+    })
+  }, [broadcasts])
+  const liveBroadcasts = sortedBroadcasts.filter((broadcast) => isLiveBroadcast(broadcast))
+  const scheduledBroadcasts = sortedBroadcasts.filter((broadcast) => !isLiveBroadcast(broadcast))
+  const recommendedBroadcast = liveBroadcasts[0] ?? null
+  const secondaryBroadcasts = liveBroadcasts.slice(1)
+  const quotaExhausted = [creatorError, targetError, generalError, activeSession?.lastError]
+    .filter(Boolean)
+    .some((message) => isQuotaError(message ?? null))
+  const commandFocusRing =
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f3f6fa] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0d12] focus-visible:shadow-[0_0_0_4px_rgba(225,29,46,0.35)]'
+  const utilityButtonClass = `inline-flex h-[34px] items-center justify-center rounded-[10px] border border-[#263142] bg-[#18212d] px-5 text-[13px] font-medium text-[#a9b3c1] transition-colors duration-150 hover:border-[#314056] hover:bg-[#1c2431] disabled:cursor-not-allowed disabled:opacity-50 ${commandFocusRing}`
+  const primaryButtonClass = `inline-flex h-[40px] items-center justify-center rounded-[10px] bg-[#e11d2e] px-6 text-[14px] font-semibold text-[#fff4f5] transition-colors duration-150 hover:bg-[#f03a49] disabled:cursor-not-allowed disabled:opacity-50 ${commandFocusRing}`
+  const liveButtonClass = `inline-flex h-[34px] min-w-[120px] items-center justify-center rounded-[8px] bg-[#e11d2e] px-[18px] text-[13px] font-semibold text-[#fff4f5] transition-colors duration-150 hover:bg-[#f03a49] disabled:cursor-not-allowed disabled:opacity-50 ${commandFocusRing}`
+  const secondaryMonitorButtonClass = `inline-flex h-[34px] min-w-[94px] items-center justify-center rounded-[8px] border border-[#2f3a4a] bg-[#171d26] px-4 text-[12px] font-semibold text-[#d9e1eb] transition-colors duration-150 hover:border-[#425267] hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-50 ${commandFocusRing}`
+  const tertiaryButtonClass = `inline-flex h-[26px] min-w-[91px] items-center justify-center rounded-[8px] border border-[#2b3647] px-4 text-[10px] font-medium text-[#7f8b9a] transition-colors duration-150 hover:border-[#3d4b60] hover:bg-white/[0.03] disabled:cursor-not-allowed disabled:opacity-50 ${commandFocusRing}`
+  const sectionCardClass =
+    'rounded-[18px] border border-[#243041] bg-[#121821] p-5 shadow-[0_18px_40px_rgba(0,0,0,0.28)]'
+  const apiStatus = !authStatus.authenticated
+    ? {
+        label: 'Disconnected',
+        subtitle: 'YouTube API',
+        tone: 'error' as const
+      }
+    : creatorError
+      ? {
+          label: quotaExhausted ? 'Rate Limited' : 'Attention',
+          subtitle: 'YouTube API',
+          tone: quotaExhausted ? ('warning' as const) : ('error' as const)
+        }
+      : { label: 'Connected', subtitle: 'YouTube API', tone: 'success' as const }
+  const oauthStatus = authStatus.authenticated
+    ? {
+        label: 'Authorized',
+        subtitle: 'Channel OAuth',
+        tone: 'success' as const
+      }
+    : {
+        label: 'Expired',
+        subtitle: 'Channel OAuth',
+        tone: 'error' as const
+      }
+  const quotaStatus = {
+    label: '--',
+    subtitle: 'API Quota Left',
+    tone: quotaExhausted ? ('warning' as const) : ('neutral' as const)
+  }
 
   if (!authStatus.authenticated) {
     return (
-      <div>
-        <h1 className="mb-1 text-xl font-bold">Stream Monitor</h1>
-        <p className="mb-6 text-sm text-muted-foreground">
-          Sign in with YouTube to start tracking Super Chats.
-        </p>
-        <div className="rounded-xl border border-border bg-card p-6 text-center">
-          <Radio className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">Not connected</p>
+      <div className="space-y-6">
+        <div>
+          <h1 className="font-display mb-2 text-[2rem] font-semibold tracking-[-0.04em]">
+            Stream Monitor
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Sign in with YouTube to start tracking Super Chats.
+          </p>
+        </div>
+        <div className="rounded-[22px] border border-[#263142] bg-[#121821] p-8 text-center shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
+          <Radio className="mx-auto mb-4 h-10 w-10 text-muted-foreground" />
+          <p className="text-sm font-medium text-[#f3f6fa]">YouTube is not connected</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Authenticate in ChatControl to unlock active stream discovery and public stream resolve.
+          </p>
         </div>
       </div>
     )
   }
 
   if (activeSession) {
-    return (
-      <div>
-        <h1 className="mb-1 text-xl font-bold">Live Session</h1>
-        <div className="mb-6 flex items-center gap-2">
-          <p className="min-w-0 truncate text-sm text-muted-foreground">{activeSession.title}</p>
-          <StreamSourceBadge sourceMode={activeSession.sourceMode} />
-        </div>
-
-        <div className="mb-4 rounded-xl border border-border bg-card p-4">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <StatusDot status={streamStatus} />
-              <span className="text-sm font-medium">{getStatusLabel(streamStatus)}</span>
-            </div>
-            <button
-              onClick={() => void stopSession()}
-              className="flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
-            >
-              <Square className="h-3 w-3" />
-              Stop
-            </button>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <StatTile label="Total" value={formatCurrency(stats.totalConverted, displayCurrency)} />
-            <StatTile label="Unread" value={String(stats.unreadCount)} />
-            <StatTile label="Saved" value={String(stats.savedCount)} />
-          </div>
-        </div>
-
-        {generalError && <InlineError message={generalError} />}
-      </div>
-    )
+    return <LiveSessionCommand onStop={stopSession} loading={loading} error={generalError} />
   }
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="mb-1 text-xl font-bold">Stream Monitor</h1>
-        <p className="text-sm text-muted-foreground">
-          Monitor one of your active livestreams, or resolve a public live stream by URL below.
-        </p>
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-display text-[2rem] font-semibold tracking-[-0.04em] text-[#f3f6fa]">
+            Stream Monitor
+          </h1>
+          <p className="mt-1 text-[13px] leading-5 text-[#7f8c9d]">
+            Detect and monitor YouTube livestreams
+          </p>
+        </div>
+        <button
+          onClick={() => void handleRefresh()}
+          disabled={refreshing || creatorLoading || todayStatsLoading}
+          className={`${utilityButtonClass} min-w-[96px] self-start`}
+          title="Refresh broadcasts"
+        >
+          {refreshing ? 'Refreshing' : 'Refresh'}
+        </button>
       </div>
 
-      <section className="rounded-2xl border border-border bg-card p-4">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <div className="mb-1 flex items-center gap-2">
-              <h2 className="text-sm font-semibold">My Active Streams</h2>
-              <StreamSourceBadge sourceMode="creator_broadcast" />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              This stays the default creator workflow.
-            </p>
-          </div>
-          <button
-            onClick={() => void handleRefresh()}
-            disabled={refreshing || creatorLoading}
-            className="rounded-lg p-2 transition-colors hover:bg-secondary disabled:opacity-50"
-            title="Refresh broadcasts"
-          >
-            <RefreshCw
-              className={`h-4 w-4 text-muted-foreground ${refreshing ? 'animate-spin' : ''}`}
-            />
-          </button>
-        </div>
-
-        {creatorLoading && broadcasts.length === 0 ? (
-          <div className="flex items-center justify-center rounded-xl border border-border bg-background/40 p-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : broadcasts.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border p-8 text-center">
-            <Radio className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No active livestreams found</p>
-            <p className="mt-1 text-xs text-muted-foreground/60">
-              Start a stream on YouTube, then refresh.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {broadcasts.map((broadcast) => (
-              <div
-                key={broadcast.id}
-                className="flex items-center justify-between rounded-xl border border-border bg-background/40 p-4"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500" />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{broadcast.title}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {broadcast.actualStartTime
-                        ? `Started ${new Date(broadcast.actualStartTime).toLocaleTimeString()}`
-                        : 'Live'}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => void startSession(broadcast.id)}
-                  disabled={creatorLoading}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-                >
-                  <Play className="h-3 w-3" />
-                  Monitor
-                </button>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(356px,1fr)]">
+        <section className={sectionCardClass}>
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <div className="mb-2 flex items-center gap-3">
+                <span className="h-6 w-[3px] rounded-full bg-[#e11d2e]" />
+                <h2 className="font-display text-[1.4rem] font-semibold tracking-[-0.03em] text-[#f3f6fa]">
+                  My Active Streams
+                </h2>
               </div>
-            ))}
-          </div>
-        )}
-
-        {creatorError && (
-          <div className="mt-4">
-            <InlineError message={creatorError} />
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-2xl border border-dashed border-border bg-card/60 p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div className="mb-1 flex items-center gap-2">
-              <h2 className="text-sm font-semibold">Monitor by URL/Video ID</h2>
-              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
-                Beta
-              </span>
+              <p className="text-[13px] leading-5 text-[#8a95a4]">
+                Automatically detected from your connected channel
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Secondary path for public livestreams with an active YouTube live chat.
-            </p>
+            <button
+              onClick={() => void handleRefresh()}
+              disabled={refreshing || creatorLoading}
+              className={`inline-flex h-[28px] items-center gap-2 rounded-[8px] px-2.5 text-[12px] font-medium text-[#8f99a6] transition-colors hover:bg-white/[0.03] hover:text-[#dce4ee] disabled:opacity-50 ${commandFocusRing}`}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
           </div>
-          <button
-            onClick={() => setShowTargetMonitor((current) => !current)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-secondary"
-          >
-            <Link2 className="h-3.5 w-3.5" />
-            {showTargetMonitor ? 'Hide' : 'Open'}
-          </button>
-        </div>
 
-        {showTargetMonitor && (
-          <div className="mt-4 space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <input
-                value={targetInput}
-                onChange={(event) => handleTargetInputChange(event.target.value)}
-                placeholder="Paste a watch URL, youtu.be URL, or 11-character video ID"
-                className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary"
-              />
-              <button
-                onClick={() => void handleResolveTarget()}
-                disabled={targetLoading || targetInput.trim().length === 0}
-                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-secondary disabled:opacity-50"
-              >
-                {targetLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Link2 className="h-4 w-4" />
-                )}
-                Resolve
-              </button>
+          {creatorLoading && broadcasts.length === 0 ? (
+            <div className="space-y-3">
+              <BroadcastSkeleton featured />
+              <ScheduledSkeleton />
+              <OpenSlotPlaceholder />
             </div>
-
-            {targetError && <InlineError message={targetError} />}
-
-            {resolvedTarget && (
-              <div className="rounded-xl border border-border bg-background/50 p-4">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="mb-2 flex items-center gap-2">
-                      <div className="h-2 w-2 shrink-0 rounded-full bg-red-500" />
-                      <StreamSourceBadge sourceMode={resolvedTarget.sourceMode} />
-                    </div>
-                    <p className="truncate text-sm font-semibold">{resolvedTarget.title}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {resolvedTarget.channelTitle}
-                    </p>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {resolvedTarget.actualStartTime
-                        ? `Live since ${new Date(resolvedTarget.actualStartTime).toLocaleTimeString()}`
-                        : 'Live now'}
-                    </p>
+          ) : (
+            <div className="space-y-3">
+              {recommendedBroadcast ? (
+                <>
+                  <LiveBroadcastCard
+                    broadcast={recommendedBroadcast}
+                    featured
+                    disabled={creatorLoading || quotaExhausted}
+                    buttonLabel="Start Monitoring"
+                    buttonClass={liveButtonClass}
+                    onMonitor={(broadcastId) => void startSession(broadcastId)}
+                  />
+                  {secondaryBroadcasts.map((broadcast) => (
+                    <LiveBroadcastCard
+                      key={broadcast.id}
+                      broadcast={broadcast}
+                      disabled={creatorLoading || quotaExhausted}
+                      buttonLabel="Monitor"
+                      buttonClass={secondaryMonitorButtonClass}
+                      onMonitor={(broadcastId) => void startSession(broadcastId)}
+                    />
+                  ))}
+                </>
+              ) : (
+                <div className="rounded-[14px] border border-dashed border-[#293546] bg-[#111821] px-6 py-7 text-center">
+                  <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.04]">
+                    <Radio className="h-5 w-5 text-[#7f8c9d]" />
                   </div>
+                  <p className="text-[17px] font-semibold text-[#cfd7e1]">
+                    No active livestreams found
+                  </p>
+                  <p className="mx-auto mt-2 max-w-[320px] text-[13px] leading-5 text-[#7f8c9d]">
+                    Start a stream on YouTube, then refresh or resolve any public livestream from
+                    the right rail.
+                  </p>
                   <button
-                    onClick={() => void startSessionFromTarget(resolvedTarget)}
-                    disabled={targetLoading}
-                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                    onClick={() => targetInputRef.current?.focus()}
+                    className={`mt-4 text-[13px] font-medium text-[#d7dee7] underline decoration-[#445570] underline-offset-4 transition-colors hover:text-[#f3f6fa] ${commandFocusRing}`}
                   >
-                    <Play className="h-3 w-3" />
-                    Monitor Stream
+                    Use the URL resolver
                   </button>
                 </div>
+              )}
+
+              {scheduledBroadcasts.map((broadcast) => (
+                <ScheduledBroadcastCard
+                  key={broadcast.id}
+                  broadcast={broadcast}
+                  buttonClass={tertiaryButtonClass}
+                />
+              ))}
+
+              <OpenSlotPlaceholder />
+            </div>
+          )}
+
+          {creatorErrorMessage && (
+            <div className="mt-4">
+              <InlineError message={creatorErrorMessage} />
+            </div>
+          )}
+        </section>
+
+        <div className="space-y-5">
+          <section className={sectionCardClass}>
+            <div className="mb-4">
+              <div className="mb-2 flex items-center gap-3">
+                <span className="h-6 w-[3px] rounded-full bg-[#57a0ff]" />
+                <h2 className="font-display text-[1.4rem] font-semibold tracking-[-0.03em] text-[#f3f6fa]">
+                  Monitor Any Livestream
+                </h2>
+              </div>
+              <p className="max-w-[540px] text-[13px] leading-5 text-[#8a95a4]">
+                Enter a YouTube livestream URL or video ID to monitor Super Chats from any public
+                stream
+              </p>
+            </div>
+
+            <label className="mb-2 block text-[12px] font-medium text-[#9ba7b8]">
+              Livestream URL or Video ID
+            </label>
+            <div className="relative">
+              <Link2 className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7f8c9d]" />
+              <input
+                ref={targetInputRef}
+                value={targetInput}
+                onChange={(event) => handleTargetInputChange(event.target.value)}
+                placeholder="youtube.com/watch?v=... or video ID"
+                className={`min-w-0 w-full rounded-[11px] border border-[#263142] bg-[#0d131a] py-[10px] pl-11 pr-4 text-[14px] text-[#f3f6fa] placeholder:text-[#6f7b8d] transition-colors focus:border-[#e11d2e] ${commandFocusRing}`}
+              />
+            </div>
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+              <button
+                onClick={() => void handleResolveTarget()}
+                disabled={targetLoading || targetInput.trim().length === 0 || quotaExhausted}
+                className={`${primaryButtonClass} min-w-[138px] px-5 self-start sm:self-auto`}
+              >
+                {targetLoading ? 'Resolving' : 'Resolve Stream'}
+              </button>
+              <p className="text-[13px] leading-5 text-[#7f8c9d]">
+                We&apos;ll verify the stream is live and show details
+              </p>
+            </div>
+
+            {targetErrorMessage && (
+              <div className="mt-4">
+                <InlineError message={targetErrorMessage} />
               </div>
             )}
-          </div>
-        )}
-      </section>
 
-      {generalError && <InlineError message={generalError} />}
+            {resolvedTarget && (
+              <div className="mt-4 rounded-[14px] border border-[#263142] bg-[#151d28] p-4">
+                <p className="truncate text-[18px] font-semibold text-[#f3f6fa]">
+                  {resolvedTarget.title}
+                </p>
+                <p className="mt-1 text-[13px] text-[#8a95a4]">{resolvedTarget.channelTitle}</p>
+                <p className="mt-2 text-[12px] text-[#8a95a4]">
+                  {resolvedTarget.actualStartTime
+                    ? formatRelativeSync(new Date(resolvedTarget.actualStartTime), 'Live since')
+                    : 'Live now'}
+                </p>
+                <button
+                  onClick={() => void startSessionFromTarget(resolvedTarget)}
+                  disabled={targetLoading || quotaExhausted}
+                  className={`${liveButtonClass} mt-4`}
+                >
+                  Start Monitoring
+                </button>
+              </div>
+            )}
+          </section>
+
+          <section className={sectionCardClass}>
+            <div className="mb-4 flex items-center gap-3">
+              <span className="h-6 w-[3px] rounded-full bg-[#1fd0b3]" />
+              <h2 className="font-display text-[1.35rem] font-semibold tracking-[-0.03em] text-[#f3f6fa]">
+                Connection Status
+              </h2>
+            </div>
+
+            {creatorLoading && !lastSyncedAt ? (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <ConnectionSkeleton />
+                <ConnectionSkeleton />
+                <ConnectionSkeleton />
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <ConnectionTile
+                  title={apiStatus.subtitle}
+                  label={apiStatus.label}
+                  tone={apiStatus.tone}
+                />
+                <ConnectionTile
+                  title={oauthStatus.subtitle}
+                  label={oauthStatus.label}
+                  tone={oauthStatus.tone}
+                />
+                <ConnectionTile
+                  title={quotaStatus.subtitle}
+                  label={quotaStatus.label}
+                  tone={quotaStatus.tone}
+                  hideDot
+                />
+              </div>
+            )}
+          </section>
+
+          <section className={sectionCardClass}>
+            <div className="mb-4">
+              <h2 className="font-display text-[1.35rem] font-semibold tracking-[-0.03em] text-[#f3f6fa]">
+                Today&apos;s Stats
+              </h2>
+            </div>
+
+            {todayStatsLoading && !lastSyncedAt ? (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <KpiSkeleton />
+                <KpiSkeleton />
+                <KpiSkeleton />
+              </div>
+            ) : (
+              <div className="grid overflow-hidden rounded-[14px] border border-[#2d394b] bg-[#151d28] sm:grid-cols-3">
+                <KpiTile label="Sessions" value={String(todayStats.sessions)} accent="danger" />
+                <KpiTile
+                  label="Super Chats"
+                  value={Intl.NumberFormat('en-US').format(todayStats.superChats)}
+                  bordered
+                />
+                <KpiTile
+                  label="Total Raised"
+                  value={formatCompactCurrency(todayStats.totalRaised, todayStats.currency)}
+                  accent="success"
+                  bordered
+                />
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+
+      {generalErrorMessage && <InlineError message={generalErrorMessage} />}
+    </div>
+  )
+}
+
+function LiveBroadcastCard({
+  broadcast,
+  featured = false,
+  disabled,
+  buttonLabel,
+  buttonClass,
+  onMonitor
+}: {
+  broadcast: BroadcastInfo
+  featured?: boolean
+  disabled: boolean
+  buttonLabel: string
+  buttonClass: string
+  onMonitor: (broadcastId: string) => void
+}): React.JSX.Element {
+  const rowClass = featured
+    ? 'border-[#263142] bg-[#171f2a]'
+    : 'border-[#263142] bg-[#151d28] hover:border-[#314056]'
+
+  return (
+    <div
+      className={`group relative overflow-hidden rounded-[14px] border px-4 py-[13px] transition-colors duration-150 ${rowClass}`}
+    >
+      <div className="absolute inset-y-4 left-0 w-[3px] rounded-full bg-[#e11d2e]" />
+      <div className="flex items-start justify-between gap-4 pl-3">
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-[12px]">
+            <div className="flex flex-wrap items-center gap-2 text-[#9aa5b5]">
+              <span className="rounded-[6px] bg-[#42171d] px-2.5 py-1 font-semibold uppercase tracking-[0.14em] text-[#ffb0b7]">
+                Live
+              </span>
+              <span>
+                {broadcast.actualStartTime
+                  ? formatRelativeSync(new Date(broadcast.actualStartTime), 'Started')
+                  : 'Live now'}
+              </span>
+            </div>
+            <span className="shrink-0 text-[#9aa5b5]">Live chat ready</span>
+          </div>
+          <p className="truncate text-[1.22rem] font-semibold leading-[1.2] tracking-[-0.03em] text-[#f3f6fa]">
+            {broadcast.title}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-6">
+            <MetricPair label="Super Chats" value="Ready to track" />
+            <MetricPair
+              label="Elapsed"
+              value={
+                broadcast.actualStartTime ? formatElapsedTime(broadcast.actualStartTime) : 'Live'
+              }
+              accent="default"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={() => onMonitor(broadcast.id)}
+          disabled={disabled}
+          className={`${buttonClass} shrink-0 self-center`}
+        >
+          {buttonLabel}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ScheduledBroadcastCard({
+  broadcast,
+  buttonClass
+}: {
+  broadcast: BroadcastInfo
+  buttonClass: string
+}): React.JSX.Element {
+  const isPremiere =
+    broadcast.status.toLowerCase().includes('complete') ||
+    broadcast.status.toLowerCase().includes('testing')
+
+  return (
+    <div className="rounded-[14px] border border-[#263142] bg-[#151d28] p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px]">
+            <span
+              className={`rounded-[6px] px-2.5 py-1 font-semibold uppercase tracking-[0.14em] ${
+                isPremiere ? 'bg-[#3b2a12] text-[#f1c76d]' : 'bg-[#182130] text-[#c5d0dd]'
+              }`}
+            >
+              {isPremiere ? 'Premiere' : 'Scheduled'}
+            </span>
+            <span className="flex items-center gap-1 text-[#98a4b3]">
+              <Clock3 className="h-3.5 w-3.5" />
+              {broadcast.scheduledStartTime
+                ? `Starts ${new Date(broadcast.scheduledStartTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                : 'Waiting room open'}
+            </span>
+          </div>
+          <p className="truncate text-[1.2rem] font-semibold leading-[1.2] tracking-[-0.03em] text-[#f3f6fa]">
+            {broadcast.title}
+          </p>
+          <p className="mt-2 text-[13px] leading-5 text-[#7f8c9d]">
+            {broadcast.scheduledStartTime
+              ? formatScheduledDate(broadcast.scheduledStartTime)
+              : 'Waiting room open'}
+          </p>
+        </div>
+        <button disabled title="Coming soon" className={`${buttonClass} shrink-0 self-center`}>
+          Notify Me
+        </button>
+      </div>
     </div>
   )
 }
 
 function InlineError({ message }: { message: string }): React.JSX.Element {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3">
-      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-      <p className="text-xs text-destructive">{message}</p>
+    <div className="flex items-start gap-3 rounded-[16px] border border-[#6f1d25] bg-[#2a1418] p-4">
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#f6727d]" />
+      <p className="min-w-0 break-words text-sm leading-6 text-[#ffc8cd]">
+        {formatStreamErrorMessage(message)}
+      </p>
     </div>
   )
 }
 
-function StatTile({ label, value }: { label: string; value: string }): React.JSX.Element {
+function MetricPair({
+  label,
+  value,
+  accent = 'default'
+}: {
+  label: string
+  value: string
+  accent?: 'default' | 'success'
+}): React.JSX.Element {
   return (
-    <div className="rounded-lg bg-secondary/50 p-3 text-center">
-      <p className="mb-1 text-xs text-muted-foreground">{label}</p>
-      <p className="text-sm font-semibold">{value}</p>
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8592a4]">
+        {label}
+      </p>
+      <p
+        className={`mt-1 text-[15px] font-semibold leading-[1.3] ${accent === 'success' ? 'text-[#18b777]' : 'text-[#f3f6fa]'}`}
+      >
+        {value}
+      </p>
     </div>
   )
 }
 
-function StatusDot({ status }: { status: StreamStatusEvent | null }): React.JSX.Element {
-  if (!status || status.type === 'connected' || status.type === 'polling') {
-    return <Wifi className="h-4 w-4 text-green-400" />
-  }
-
-  if (status.type === 'reconnecting') {
-    return <Loader2 className="h-4 w-4 animate-spin text-yellow-400" />
-  }
-
-  return <WifiOff className="h-4 w-4 text-red-400" />
+function BroadcastSkeleton({ featured = false }: { featured?: boolean }): React.JSX.Element {
+  return (
+    <div
+      className={`animate-pulse rounded-[18px] border border-[#2a3648] ${featured ? 'bg-[#171f29] p-5' : 'bg-[#141b24] p-4'}`}
+    >
+      <div className="mb-4 flex gap-2">
+        <div className="h-6 w-16 rounded-full bg-white/8" />
+        <div className="h-6 w-32 rounded-full bg-white/5" />
+      </div>
+      <div className="h-6 w-3/4 rounded bg-white/8" />
+      <div className="mt-4 flex gap-4">
+        <div className="h-10 w-28 rounded bg-white/6" />
+        <div className="h-10 w-28 rounded bg-white/6" />
+      </div>
+    </div>
+  )
 }
 
-function getStatusLabel(status: StreamStatusEvent | null): string {
-  if (!status) return 'Connecting...'
+function ScheduledSkeleton(): React.JSX.Element {
+  return (
+    <div className="animate-pulse rounded-[18px] border border-[#2a3648] bg-[#141b24] p-5">
+      <div className="mb-3 h-5 w-24 rounded-full bg-white/8" />
+      <div className="h-5 w-2/3 rounded bg-white/8" />
+      <div className="mt-3 h-4 w-40 rounded bg-white/6" />
+    </div>
+  )
+}
 
-  switch (status.type) {
-    case 'connected':
-    case 'polling':
-      return 'Connected'
-    case 'reconnecting':
-      return `Reconnecting (attempt ${status.attempt})...`
+function OpenSlotPlaceholder(): React.JSX.Element {
+  return (
+    <div className="rounded-[14px] border border-dashed border-[#293546] bg-[#111821] px-6 py-8 text-center">
+      <div className="mx-auto mb-4 h-11 w-11 rounded-full bg-white/[0.05]" />
+      <p className="text-[17px] font-semibold text-[#cfd7e1]">No other active streams</p>
+      <p className="mx-auto mt-2 max-w-[270px] text-[13px] leading-5 text-[#7f8c9d]">
+        When you go live on YouTube, your streams will appear here automatically
+      </p>
+    </div>
+  )
+}
+
+function ConnectionSkeleton(): React.JSX.Element {
+  return (
+    <div className="animate-pulse rounded-[14px] border border-[#2a3648] bg-[#151d28] p-4">
+      <div className="mb-3 h-3 w-24 rounded bg-white/10" />
+      <div className="mt-2 h-7 w-28 rounded bg-white/12" />
+      <div className="mt-3 h-4 w-24 rounded bg-white/6" />
+    </div>
+  )
+}
+
+function KpiSkeleton(): React.JSX.Element {
+  return (
+    <div className="animate-pulse rounded-[14px] border border-[#2a3648] bg-[#151d28] px-5 py-6">
+      <div className="mx-auto h-8 w-20 rounded bg-white/12" />
+      <div className="mx-auto mt-4 h-3 w-16 rounded bg-white/8" />
+    </div>
+  )
+}
+
+function ConnectionTile({
+  title,
+  label,
+  tone,
+  hideDot = false
+}: {
+  title: string
+  label: string
+  tone: 'success' | 'error' | 'warning' | 'neutral'
+  hideDot?: boolean
+}): React.JSX.Element {
+  const toneClasses = getToneClasses(tone)
+
+  return (
+    <div className="flex min-h-[108px] flex-col justify-between rounded-[14px] border border-[#2d394b] bg-[#151d28] px-4 py-3.5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#98a4b3]">
+        {title}
+      </p>
+      <div className="mt-1.5 min-w-0">
+        <div className="flex items-center gap-2">
+          {!hideDot && <span className={`h-2.5 w-2.5 rounded-full ${toneClasses.dot}`} />}
+          <p
+            className={`min-w-0 break-words text-[1.5rem] font-semibold leading-[1.1] tracking-[-0.03em] ${toneClasses.text}`}
+          >
+            {label}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function KpiTile({
+  label,
+  value,
+  accent = 'default',
+  bordered = false
+}: {
+  label: string
+  value: string
+  accent?: 'default' | 'danger' | 'success'
+  bordered?: boolean
+}): React.JSX.Element {
+  const valueClass =
+    accent === 'success'
+      ? 'text-[#18b777]'
+      : accent === 'danger'
+        ? 'text-[#e11d2e]'
+        : 'text-[#f3f6fa]'
+
+  return (
+    <div
+      className={`flex min-h-[132px] flex-col items-center justify-center px-5 py-6 text-center ${
+        bordered ? 'border-t border-[#2d394b] sm:border-l sm:border-t-0' : ''
+      }`}
+    >
+      <p className={`text-[2.15rem] font-semibold leading-none tracking-[-0.04em] ${valueClass}`}>
+        {value}
+      </p>
+      <p className="mt-3 text-[13px] font-medium text-[#8f9bad]">{label}</p>
+    </div>
+  )
+}
+
+function getToneClasses(tone: 'success' | 'error' | 'warning' | 'neutral'): {
+  dot: string
+  text: string
+} {
+  switch (tone) {
+    case 'success':
+      return { dot: 'bg-[#18b777]', text: 'text-[#2ad89a]' }
     case 'error':
-      return status.message
-    case 'ended':
-      return 'Stream ended'
+      return { dot: 'bg-[#f04452]', text: 'text-[#ff8d97]' }
+    case 'warning':
+      return { dot: 'bg-[#d9a441]', text: 'text-[#e3ba63]' }
     default:
-      return 'Unknown'
+      return { dot: 'bg-[#738397]', text: 'text-[#f3f6fa]' }
   }
+}
+
+function formatStreamErrorMessage(message: string): string {
+  const withoutAnchorTags = message.replace(/<a\b[^>]*>(.*?)<\/a>/giu, '$1')
+  const withoutHtml = withoutAnchorTags.replace(/<\/?[^>]+>/gu, ' ')
+  return decodeHtmlEntities(withoutHtml).replace(/\s+/gu, ' ').trim()
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&amp;', '&')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+}
+
+function isQuotaError(message: string | null): boolean {
+  if (!message) return false
+  const normalized = message.toLowerCase()
+  return normalized.includes('quota') || normalized.includes('ratelimit')
+}
+
+function isLiveBroadcast(broadcast: BroadcastInfo): boolean {
+  return Boolean(broadcast.actualStartTime) || broadcast.status.toLowerCase().includes('live')
+}
+
+function isSameLocalDay(dateValue: string, compareDate: Date): boolean {
+  const date = new Date(dateValue)
+  return (
+    date.getFullYear() === compareDate.getFullYear() &&
+    date.getMonth() === compareDate.getMonth() &&
+    date.getDate() === compareDate.getDate()
+  )
+}
+
+function formatRelativeSync(date: Date, prefix: string): string {
+  const diffMs = Date.now() - date.getTime()
+  const diffMinutes = Math.max(0, Math.round(diffMs / 60000))
+
+  if (diffMinutes < 1) return `${prefix} just now`
+  if (diffMinutes < 60) return `${prefix} ${diffMinutes}m ago`
+
+  const diffHours = Math.round(diffMinutes / 60)
+  return `${prefix} ${diffHours}h ago`
+}
+
+function formatElapsedTime(value: string): string {
+  const diffMs = Date.now() - new Date(value).getTime()
+  const totalMinutes = Math.max(1, Math.floor(diffMs / 60000))
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function formatScheduledDate(value: string): string {
+  const date = new Date(value)
+  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${date.toLocaleTimeString(
+    [],
+    {
+      hour: 'numeric',
+      minute: '2-digit'
+    }
+  )}`
 }

@@ -5,6 +5,14 @@ function isSortOrder(value: unknown): value is SortOrder {
   return value === 'latest' || value === 'oldest' || value === 'highest'
 }
 
+function normalizeOverlayOpacity(value: unknown): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return DEFAULT_PREFERENCES.overlayOpacity
+  }
+
+  return Math.min(100, Math.max(40, Math.round(value)))
+}
+
 export function sanitizePreferences(input: unknown): AppPreferences {
   const candidate = typeof input === 'object' && input !== null ? input : {}
   const prefs = candidate as Partial<AppPreferences>
@@ -21,6 +29,10 @@ export function sanitizePreferences(input: unknown): AppPreferences {
       typeof prefs.soundEnabled === 'boolean'
         ? prefs.soundEnabled
         : DEFAULT_PREFERENCES.soundEnabled,
+    desktopNotificationsEnabled:
+      typeof prefs.desktopNotificationsEnabled === 'boolean'
+        ? prefs.desktopNotificationsEnabled
+        : DEFAULT_PREFERENCES.desktopNotificationsEnabled,
     overlayAlwaysOnTop:
       typeof prefs.overlayAlwaysOnTop === 'boolean'
         ? prefs.overlayAlwaysOnTop
@@ -31,6 +43,7 @@ export function sanitizePreferences(input: unknown): AppPreferences {
         : DEFAULT_PREFERENCES.overlayLocked,
     compactMode:
       typeof prefs.compactMode === 'boolean' ? prefs.compactMode : DEFAULT_PREFERENCES.compactMode,
+    overlayOpacity: normalizeOverlayOpacity(prefs.overlayOpacity),
     theme: 'dark'
   }
 }

@@ -10,9 +10,11 @@ describe('sanitizePreferences', () => {
         preferredCurrency: '',
         defaultSort: 'sideways',
         soundEnabled: 'yes',
+        desktopNotificationsEnabled: 'sometimes',
         overlayAlwaysOnTop: 'sometimes',
         overlayLocked: 1,
         compactMode: 'tight',
+        overlayOpacity: 'opaque',
         theme: 'light'
       })
     ).toEqual(DEFAULT_PREFERENCES)
@@ -24,19 +26,28 @@ describe('sanitizePreferences', () => {
         preferredCurrency: 'eur',
         defaultSort: 'highest',
         soundEnabled: true,
+        desktopNotificationsEnabled: false,
         overlayAlwaysOnTop: false,
         overlayLocked: true,
-        compactMode: true
+        compactMode: true,
+        overlayOpacity: 72.8
       })
     ).toEqual({
       preferredCurrency: 'EUR',
       defaultSort: 'highest',
       soundEnabled: true,
+      desktopNotificationsEnabled: false,
       overlayAlwaysOnTop: false,
       overlayLocked: true,
       compactMode: true,
+      overlayOpacity: 73,
       theme: 'dark'
     })
+  })
+
+  it('clamps overlay opacity into the supported range', () => {
+    expect(sanitizePreferences({ overlayOpacity: 5 }).overlayOpacity).toBe(40)
+    expect(sanitizePreferences({ overlayOpacity: 101 }).overlayOpacity).toBe(100)
   })
 })
 

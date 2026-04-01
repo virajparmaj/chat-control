@@ -86,7 +86,13 @@ export function setOverlayAlwaysOnTop(enabled: boolean): void {
   overlayWindow.setAlwaysOnTop(enabled)
 }
 
+export function setOverlayOpacity(opacity: number): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  overlayWindow.setOpacity(opacity / 100)
+}
+
 export function applyOverlayPreferences(preferences: AppPreferences): void {
   setOverlayAlwaysOnTop(preferences.overlayAlwaysOnTop)
   setOverlayLocked(preferences.overlayLocked)
+  setOverlayOpacity(preferences.overlayOpacity)
 }

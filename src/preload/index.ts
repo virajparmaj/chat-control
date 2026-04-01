@@ -1,13 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ActiveSessionSnapshot,
+  AppMeta,
   AppPreferences,
   AuthStatus,
   BroadcastInfo,
   DonorAggregate,
+  LeaderboardDonorAggregate,
+  LeaderboardScope,
   PaidMessage,
   PaidMessageState,
   ResolvedLiveTarget,
+  SavedArchiveItem,
+  SessionReport,
   SessionStats,
   SessionSummary,
   SortOrder,
@@ -34,28 +39,51 @@ const api = {
   superchats: {
     list: (sessionId: string, state?: PaidMessageState, sort?: SortOrder): Promise<PaidMessage[]> =>
       ipcRenderer.invoke('superchat:list', sessionId, state, sort),
+    listSaved: (sort?: SortOrder): Promise<SavedArchiveItem[]> =>
+      ipcRenderer.invoke('superchat:list-saved', sort),
     markRead: (messageId: string): Promise<PaidMessage | null> =>
       ipcRenderer.invoke('superchat:mark-read', messageId),
     save: (messageId: string): Promise<PaidMessage | null> =>
       ipcRenderer.invoke('superchat:save', messageId),
     undo: (messageId: string): Promise<PaidMessage | null> =>
-      ipcRenderer.invoke('superchat:undo', messageId)
+      ipcRenderer.invoke('superchat:undo', messageId),
+    markAllRead: (sessionId: string): Promise<PaidMessage[]> =>
+      ipcRenderer.invoke('superchat:mark-all-read', sessionId),
+    clearSaved: (): Promise<PaidMessage[]> => ipcRenderer.invoke('superchat:clear-saved'),
+    exportSaved: (sort?: SortOrder): Promise<string | null> =>
+      ipcRenderer.invoke('superchat:export-saved', sort),
+    copyText: (messageId: string): Promise<string | null> =>
+      ipcRenderer.invoke('superchat:copy-text', messageId)
   },
   donors: {
     list: (sessionId: string): Promise<DonorAggregate[]> =>
-      ipcRenderer.invoke('donors:list', sessionId)
+      ipcRenderer.invoke('donors:list', sessionId),
+    listAllTime: (): Promise<LeaderboardDonorAggregate[]> =>
+      ipcRenderer.invoke('donors:list-all-time'),
+    exportLeaderboard: (scope: LeaderboardScope): Promise<string | null> =>
+      ipcRenderer.invoke('donors:export-leaderboard', scope)
   },
   sessions: {
     list: (): Promise<StreamSession[]> => ipcRenderer.invoke('sessions:list'),
     summary: (sessionId: string): Promise<SessionSummary | null> =>
       ipcRenderer.invoke('sessions:summary', sessionId),
+    report: (sessionId: string): Promise<SessionReport | null> =>
+      ipcRenderer.invoke('sessions:report', sessionId),
     getActive: (): Promise<ActiveSessionSnapshot | null> =>
-      ipcRenderer.invoke('sessions:get-active')
+      ipcRenderer.invoke('sessions:get-active'),
+    exportCsv: (sessionId: string): Promise<string | null> =>
+      ipcRenderer.invoke('sessions:export-csv', sessionId),
+    copySummary: (sessionId: string): Promise<string | null> =>
+      ipcRenderer.invoke('sessions:copy-summary', sessionId)
   },
   settings: {
     get: (): Promise<AppPreferences> => ipcRenderer.invoke('settings:get'),
     update: (prefs: Partial<AppPreferences>): Promise<AppPreferences> =>
-      ipcRenderer.invoke('settings:update', prefs)
+      ipcRenderer.invoke('settings:update', prefs),
+    clearLocalData: (): Promise<AppPreferences> => ipcRenderer.invoke('settings:clear-local-data')
+  },
+  app: {
+    getMeta: (): Promise<AppMeta> => ipcRenderer.invoke('app:get-meta')
   },
   window: {
     toggleOverlay: (): Promise<void> => ipcRenderer.invoke('window:overlay-toggle'),
