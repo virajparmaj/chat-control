@@ -9,3 +9,5 @@ out
 *.db
 *.db-shm
 *.db-wal
+UI
+resources
