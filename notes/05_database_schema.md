@@ -8,7 +8,7 @@ Preferences and encrypted tokens are stored separately in the same user-data roo
 
 ## Migration Strategy
 - Schema initialization lives in `src/main/db/schema.ts`
-- `PRAGMA user_version` is set to `1`
+- `PRAGMA user_version` is set to `2` (`CURRENT_USER_VERSION = 2` in `src/main/db/schema.ts`)
 - New `sessions` columns are added in-place with `ALTER TABLE` guards
 - WAL mode is enabled
 - Foreign keys are enabled
@@ -37,6 +37,7 @@ Columns:
 - `title TEXT`
 - `started_at TEXT NOT NULL`
 - `ended_at TEXT`
+- `source_mode TEXT CHECK(source_mode IN ('creator_broadcast','public_video'))`
 - `status TEXT DEFAULT 'active' CHECK(status IN ('active','ended','error'))`
 - `total_converted REAL DEFAULT 0`
 - `converted_currency TEXT`

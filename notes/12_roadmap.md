@@ -14,8 +14,7 @@
 - Keyboard shortcuts for read/save/undo navigation
 
 ## Medium-Term
-- Exportable session summaries and saved items
-- Better sound/notification preferences beyond a single system beep
+- Better sound/notification preferences beyond a single system beep (`shell.beep()`)
 - Currency source resiliency with persisted stale-cache fallback
 - Richer analytics on donor trends across sessions
 

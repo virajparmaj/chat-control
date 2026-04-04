@@ -30,13 +30,18 @@ If notes drift from code, update the notes.
 - Security defaults must remain `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`.
 - Token storage must remain encrypted only. Do not reintroduce plaintext fallback.
 
+## Implemented — Often Mis-Documented As Deferred
+These ARE implemented in `src/main/index.ts`:
+- CSV export: saved items, session messages, leaderboard (stream + all-time scope)
+- Clipboard copy: session summary text, individual message text
+- Public stream monitoring: resolve any YouTube URL/video ID to a live target
+
 ## Current Deferred Scope
 Do not claim these are implemented unless code actually lands for them:
 - threshold-based alerts
 - pin-next mode
 - tray mode
 - keyboard shortcuts
-- export flows
 
 ## Good Next Targets
 - Electron smoke coverage

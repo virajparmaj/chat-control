@@ -35,4 +35,9 @@
 - No pin-next moderation mode
 - No tray-first experience
 - No keyboard shortcut triage
-- No export/share flow for summaries, donors, or saved items
+
+## Notes / Corrections Since Last Pass
+- Export flows (CSV for sessions, saved items, leaderboard) are **implemented** — not deferred. `01_features.md` and `12_roadmap.md` updated accordingly. (`src/main/index.ts` lines 234–391)
+- DB schema `user_version` is `2`, not `1`. (`src/main/db/schema.ts` line 3)
+- `sessions` table has a `source_mode` column (`creator_broadcast` | `public_video`) added in a migration guard.
+- Public stream monitoring via `youtube:resolve-target` / `youtube:start-session-from-target` is fully implemented.

@@ -63,6 +63,11 @@ On app startup:
 - If auth is still valid and the YouTube broadcast can be found, polling resumes from the stored cursor.
 - If recovery fails, the stale session is marked `error` and removed from runtime state.
 
+## External Dependencies
+- **YouTube Data API v3** — broadcast discovery, live chat polling (`googleapis` SDK, requires OAuth token)
+- **open.er-api.com** — exchange-rate lookups for currency conversion (`src/main/services/exchange-rate.ts`). Rates are cached in-memory for 1 hour. Falls back to stale cache on API failure. No persisted offline cache across restarts.
+- **Google OAuth endpoints** — token exchange (`https://oauth2.googleapis.com/token`) and user consent (`https://accounts.google.com/o/oauth2/v2/auth`)
+
 ## Local-First Desktop Model
 ChatControl is local-first in the sense that:
 - the app does not require a backend

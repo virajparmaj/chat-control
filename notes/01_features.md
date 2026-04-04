@@ -66,9 +66,21 @@
 - Plaintext token fallback was removed
 - Main-process session finalization now handles stream end, quota failure, auth expiry, and reconnect exhaustion consistently
 
+## Export And Clipboard — Confirmed Implemented
+`Confirmed from code` (`src/main/index.ts`):
+- `superchat:export-saved` — export saved-items archive to CSV in Downloads directory
+- `sessions:export-csv` — export all paid messages for a session to CSV in Downloads
+- `donors:export-leaderboard` — export leaderboard (stream or all-time scope) to CSV in Downloads
+- `sessions:copy-summary` — copy session summary text (totals, top donors) to clipboard
+- `superchat:copy-text` — copy individual message text to clipboard
+
+## Public Stream Monitoring — Confirmed Implemented
+`Confirmed from code` (`src/main/ipc/youtube.ipc.ts`, `src/shared/ipc-types.ts`):
+- `youtube:resolve-target(input)` — resolves a YouTube URL or video ID to a live chat target
+- `youtube:start-session-from-target(target)` — starts monitoring any public livestream, not just the authenticated creator's own broadcast
+
 ## Deferred Features
 - Threshold-based alerts
 - Pin-next mode
 - Tray mode
 - Keyboard shortcuts
-- Export flows for summaries or saved items

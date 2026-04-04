@@ -19,22 +19,36 @@ All privileged operations live in the Electron main process. Renderers must use 
 
 ### YouTube / Sessions
 - `youtube:get-broadcasts -> BroadcastInfo[]`
+- `youtube:resolve-target(input: string) -> ResolvedLiveTarget` — resolve any YouTube URL or video ID to a live target
 - `youtube:start-session(broadcastId) -> StreamSession`
+- `youtube:start-session-from-target(target: ResolvedLiveTarget) -> StreamSession` — start from a public stream
 - `youtube:stop-session() -> SessionSummary | null`
 - `sessions:get-active() -> ActiveSessionSnapshot | null`
 - `sessions:list() -> StreamSession[]`
 - `sessions:summary(sessionId) -> SessionSummary | null`
+- `sessions:report(sessionId) -> SessionReport | null` — full analytics report (peak windows, type breakdown, comparisons)
+- `sessions:export-csv(sessionId) -> string | null` — writes CSV to Downloads, returns path
+- `sessions:copy-summary(sessionId) -> string | null` — copies summary text to clipboard, returns it
 
 ### Inbox / Donors
 - `superchat:list(sessionId, state?, sort?) -> PaidMessage[]`
+- `superchat:list-saved(sort?) -> SavedArchiveItem[]` — saved items across all sessions
 - `superchat:mark-read(messageId) -> PaidMessage | null`
 - `superchat:save(messageId) -> PaidMessage | null`
 - `superchat:undo(messageId) -> PaidMessage | null`
+- `superchat:mark-all-read(sessionId) -> PaidMessage[]` — bulk clear unread for active session
+- `superchat:clear-saved() -> PaidMessage[]` — wipe entire saved archive
+- `superchat:export-saved(sort?) -> string | null` — writes CSV to Downloads, returns path
+- `superchat:copy-text(messageId) -> string | null` — copies message text to clipboard
 - `donors:list(sessionId) -> DonorAggregate[]`
+- `donors:list-all-time() -> LeaderboardDonorAggregate[]` — all-time cross-session aggregate
+- `donors:export-leaderboard(scope: 'stream' | 'all_time') -> string | null` — CSV to Downloads
 
-### Preferences / Windowing
+### Preferences / Windowing / App
 - `settings:get() -> AppPreferences`
 - `settings:update(partialPrefs) -> AppPreferences`
+- `settings:clear-local-data() -> AppPreferences` — wipes all sessions/messages/donors, resets preferences
+- `app:get-meta() -> AppMeta` — returns `{ name, version }`
 - `window:overlay-toggle() -> void`
 - `window:overlay-lock(locked) -> void`
 
