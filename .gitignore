@@ -11,3 +11,12 @@ out
 *.db-wal
 UI
 resources
+
+# Claude Code AI tool artifacts
+.claude/
+
+# Windows thumbnail cache
+Thumbs.db
+
+# Private/internal notes not suitable for public repos
+notes/08_security_sweep_2026-03-31.md
